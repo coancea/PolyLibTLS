@@ -1,0 +1,19 @@
+## Various choices of TLS support can be selected in file "TSP_TLS.h"
+## To run the SERIAL-COMMIT  keep:   "#define TLS_SC" 
+## To run the IN-PLACE model keep:   "#define TLS_IP",
+## To run HAND PARALLE       keep:   "#define HAND_PAR", etc.
+## Choice of the hash function influences performance:
+##    if "POW2_HASH_OPT"   is enabled, a hash-function of cardinality 2^17 is used
+##    if "POW2_HASH_LARGE" is enabled, a hash-function of (larger) cardinality 2^19 is used
+##     
+## NOTE THAT TO RUN THE HAND-PARALLEL CODE YOU NEED TO KEEP ONLY     "#define HAND_PAR" selected
+
+g++ -O3 -Wno-deprecated -pthread -I$LIB_TLS_ROOT -I. -o TSP TSP.cpp
+
+# EXECUTION:
+#-e requires execution mode: 
+# 	0 for sequential original
+#   1 for sequential modified, i.e., iteration rather than recursion 
+# 	2 for hand parallel, no TLS, 
+# 	3 for TLS parallel
+TSP -c 100000 -m -e 2

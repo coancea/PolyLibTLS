@@ -1,0 +1,17 @@
+## options: 
+## SEQ:
+##   idea.exe 33
+## OPT PAR:
+##   idea.exe 34
+## TLS/PAR
+##   idea/exe 35
+##
+##
+##  For In-Place Speculative TLS add:
+##    #define SP_IP
+##  For Serial-Commit Speculative TLS
+##    SP_IP needs to be undefined
+##  For Non-Speculative Support add:
+##    #define HAND_PAR
+##  For very-light RO speculative support have:
+##    #define OPTIM_HASH_RO

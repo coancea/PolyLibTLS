@@ -1,0 +1,17 @@
+## options: 
+## SEQUENTIAL EXEC:
+##   IDEAkey 33
+## HAND PARALLEL:
+##   IDEAkey 34
+## TLS PARALLEL:
+##   IDEAkey 35
+##
+##
+##  For In-Place Speculative TLS add:
+##    #define SP_IP
+##  For Serial-Commit Speculative TLS
+##    SP_IP needs to be undefined
+##  For Non-Speculative Support add:
+##    #define HAND_PAR
+##  For very-light RO speculative support have:
+##    #define OPTIM_HASH_RO

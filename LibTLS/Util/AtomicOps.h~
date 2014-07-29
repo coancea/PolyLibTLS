@@ -1,0 +1,393 @@
+#ifndef ATOMIC_OPS
+#define ATOMIC_OPS
+
+
+#ifndef MAX_SIZES
+#define MAX_SIZES
+#include "limits.h"
+#endif
+
+#include<sys/time.h>
+
+using namespace std;
+
+#define X86_64_MACHINE
+//#define pthread_yield   sched_yield
+#define HARD_WAIT       0
+
+
+//#define MODEL_LOCK
+//#define MACHINE_X86_64
+//#define MODEL_FENCE
+//#define MODEL_FREE
+
+
+/********************************/
+/*** USEFUL TYPE ABREVIATIONS ***/
+/********************************/
+
+
+typedef unsigned int  uint;
+typedef unsigned long ulong;
+
+
+/** define the type/size of a thread identifier **/
+
+
+
+#ifdef X86_64_MACHINE
+
+typedef unsigned long long  ID_WORD;
+const ID_WORD ID_WORD_MAX = ULONG_MAX;
+
+
+/**** ASSUMING A 64-bit MACHINE ****/
+typedef unsigned long long      FULL_WORD;
+const FULL_WORD FULL_WORD_MAX = ULONG_MAX;
+
+
+/* 
+  A FOURTH OF A WORD type and constants 
+*/
+typedef unsigned short  WORD_PER_4;
+
+#define MAX_WORD_PER_4     USHRT_MAX
+#define HALF_WORD_PER_4    (MAX_WORD_PER_4/2 + 1)
+#define LOG_BITS_WORD_4    4                 
+#define MASK_ID_WORD       MAX_WORD_PER_4
+
+
+//const WORD_PER_4 MAX_WORD_PER_4  = USHRT_MAX;
+//const WORD_PER_4 HALF_WORD_PER_4 = MAX_WORD_PER_4/2 + 1;
+//const uint LOG_BITS_WORD_4 = 4; //mylog(sizeof(WORD_PER_4)*8); 
+//const ID_WORD    MASK_ID_WORD = MAX_WORD_PER_4;
+//const int HARD_WAIT = 0; 
+
+inline WORD_PER_4 __attribute__((always_inline))
+convert(ID_WORD id) {
+  return id & MASK_ID_WORD;
+}
+
+inline bool __attribute__((always_inline))
+greater_than(WORD_PER_4 id1, WORD_PER_4 id2) {
+  WORD_PER_4 diff = id1 - id2;
+  //cout<<"diff: "<<diff<<endl;
+  return ( (diff < HALF_WORD_PER_4) && (diff != 0) );
+}
+
+inline bool __attribute__((always_inline))
+greater_eq(WORD_PER_4 id1, WORD_PER_4 id2) {
+  WORD_PER_4 diff = id1 - id2;
+  //cout<<"diff: "<<diff<<endl;
+  return ( diff < HALF_WORD_PER_4 );
+}
+
+
+
+
+/**
+ * @param `addr': the full word of size 4*sizeof(WORD_PER_FOUR)
+ * @param `i'   : which fourth of the word to read(?)
+ * @return        the value of the `i'th fourth of the word in the full word `addr'. 
+ */
+inline WORD_PER_4 __attribute__((always_inline))  
+read_4(volatile FULL_WORD* addr, int i) {
+  FULL_WORD w = *addr;
+  int diff = 3 - i;
+  w = w << (diff << LOG_BITS_WORD_4);   // w = w << (diff * BITS_IN_WORD_PER_4);
+  w = w >> (3    << LOG_BITS_WORD_4);   // w = w >> (3    * BITS_IN_WORD_PER_4);
+  //cout<<"read_4 i: "<<i<<" "<<sizeof(WORD_PER_4)<<" "<<sizeof(FULL_WORD)<<endl;
+  return w;
+}
+
+#endif // define X86_64_MACHINE
+
+/*********************************************************/
+
+
+
+
+/** helper function for timing **/
+
+unsigned int DiffTime(timeval* time2, timeval* time1) {
+	uint diff = 
+       (time2->tv_sec-time1->tv_sec)*1000000 + (time2->tv_usec-time1->tv_usec);
+	return diff;
+}
+
+
+inline FULL_WORD __attribute__((always_inline))
+pow2(FULL_WORD x) {
+  int tmp = x;
+  int pow = 0;
+  while(tmp!=0) { tmp = tmp >> 1; pow++; }
+  return 1 << (pow-1);
+} 
+
+
+
+/***********************************************************************/
+/*************************   Synchronisation   *************************/
+/***********************************************************************/
+
+
+inline void __attribute__((always_inline))
+non_blocking_synch33(volatile FULL_WORD* addr) {
+  char result;
+  FULL_WORD new_val = 1;
+  FULL_WORD old = 0;
+
+  do {
+    __asm__ __volatile__("lock; cmpxchgq %3, %0; setz %1"
+                         : "=m"(*addr), "=q"(result)
+                         : "m"(*addr), "r" (new_val), "a"(old) : "memory");
+  }while(result);       //while(*addr!=mask);
+}
+
+inline void release_synch33(volatile FULL_WORD* addr) {
+  *addr = 0;
+}
+
+
+/***** OR WITH MUTEX *****/
+
+
+pthread_mutex_t 		mutex = PTHREAD_MUTEX_INITIALIZER;
+//pthread_mutex_init( &mutex,      NULL);
+
+typedef unsigned char ATOMIC_WORD;  // unsigned long for CAS
+inline void __attribute__((always_inline)) 
+non_blocking_synch(volatile ATOMIC_WORD* addr) {
+  pthread_mutex_lock(&mutex);
+}
+
+inline void release_synch(volatile ATOMIC_WORD* addr) {
+  pthread_mutex_unlock(&mutex);
+}
+
+
+
+/******************************************************************/
+/********    Representation for the TLS buffered-values   *********/
+/******************************************************************/
+
+template<class T>
+struct SavedTupleIP {
+	T* addr; T val; ID_WORD time;
+
+	inline SavedTupleIP() {}
+
+	inline bool operator<(const SavedTupleIP<T>& tup) { 
+		if(addr<tup.addr) return true;
+		else if(addr==tup.addr) return time<tup.time; 
+		else return false;
+	}
+};
+
+template<class T> struct tuple_less_then {
+	inline const bool operator() (SavedTupleIP<T>* tup1, SavedTupleIP<T>* tup2) { 
+		if(tup1->addr < tup2->addr) return true;
+		else if(tup1->addr == tup2->addr) return tup1->time <= tup2->time; 
+		else return false;
+	}
+};
+
+
+
+template<class T>
+struct BuffIP_Resource {
+	SavedTupleIP<T>* buffer;
+	SavedTupleIP<T>* pos;
+	SavedTupleIP<T>* end;
+	ID_WORD	         id;
+
+	inline void init(const ID_WORD size) {
+	    buffer = new SavedTupleIP<T>[size];
+	    pos    = buffer;   end = buffer + size;
+	}
+
+        inline void save(T* addr, T& val, ID_WORD stamp) {
+		if(pos == end) resize();
+
+		pos->addr  = addr;
+		pos->val   = val;
+		pos->time  = stamp; 
+		pos++;
+	}
+
+	inline ~BuffIP_Resource()  { delete[] buffer; }
+
+	inline bool operator<(const BuffIP_Resource<T>& b) { return id<b.id; }
+
+     	void resize();
+};
+
+template <typename T>
+struct resPtr_less_then {
+	inline const bool operator()(BuffIP_Resource<T>* ptr1, BuffIP_Resource<T>* ptr2) const {
+		return (ptr1->id < ptr2->id);
+	}
+};
+
+
+
+template<class T>
+struct SavedTupleSC {
+	T* addr; T val; ID_WORD index;
+
+	inline SavedTupleSC() {}
+
+	inline bool operator<(const SavedTupleSC<T>& tup) { 
+		if(addr<=tup.addr) return true;
+		//else if(addr==tup.addr) return time<=tup.time; 
+		else return false;
+	}
+};
+
+
+
+
+/**************************************************/
+/********* Allocator with Thread padding **********/
+/**************************************************/
+
+template <class TH>
+TH* allocateThread(const unsigned long id = 0, const int padding = 32);
+
+/*
+template <class TH>
+inline TH* allocateThread(const unsigned long id = 0, const int padding = 32) {
+	unsigned long* dummy = new unsigned long[padding];
+	TH* th = new TH(id, dummy);
+	return th;
+}
+*/
+
+
+#include "Util/AtomicOps.cpp"
+
+#endif  // define ATOMIC_OPS
+
+
+
+
+/****************************************************************************/
+/********************* code from HP atomic ops ******************************/
+/****************************************************************************/
+
+/********************** compare_and_swap ***************************/
+/*
+AO_INLINE int
+AO_compare_and_swap_full(volatile AO_t *addr,
+		  	     AO_t old, AO_t new_val) 
+{
+  char result;
+  __asm__ __volatile__("lock; cmpxchgl %3, %0; setz %1"
+	    	       : "=m"(*addr), "=q"(result)
+		       : "m"(*addr), "r" (new_val), "a"(old) : "memory");
+  return (int) result;
+}
+*/
+/******************************************************************/
+
+
+/**************************************************/
+/*********** My Vector -- NOT USED ****************/
+/**************************************************/
+/*
+template<class T>
+class DynVector {
+	private:
+		unsigned long   cap;
+		unsigned long   sz;
+		T*              arr;
+
+		void resize();
+
+	public:
+		inline DynVector()                { sz = 0; cap = 0;  arr = NULL;       }
+		inline DynVector(unsigned long c) { sz = 0; cap  = c; arr = new T[cap]; }
+		virtual ~DynVector(); 
+
+		void recap(unsigned long c);
+
+		inline void push_back(const T& elem) {
+			if(sz<cap) {           arr[sz++] = elem; }
+			else       { resize(); arr[sz++] = elem; }
+		}
+
+		inline T& operator[](unsigned long i) {
+			return arr[i];
+		}
+
+		inline unsigned long 	size    ()      { return sz;    }
+		inline unsigned long 	capacity()      { return cap;   }
+		inline void 		clear   ()      { sz = 0;       }
+		inline T*               begin   ()      { return arr;   } 
+		inline T*               end     ()      { return arr+sz;}
+};
+
+
+template<class T>
+DynVector<T>::~DynVector() { 
+  delete[] arr; 
+}
+
+
+template<class T>
+void DynVector<T>::resize() {
+  cap = 2*cap;
+  T* arrnew = new T[cap];
+  for(unsigned long i=0; i<sz; i++) {
+    arrnew[i] = arr[i];
+  }
+  delete[] arr;
+  arr = arrnew;
+}
+
+template<class T>
+void DynVector<T>::recap(unsigned long c) {
+  cap = c;
+  delete[] arr;
+  arr = new T[cap];
+  sz  = 0;
+}		
+
+
+*/
+
+/*
+template<class T>
+struct SavedTuple {
+	unsigned long addr; T val;
+	inline SavedTuple() {}
+};
+
+template<class T>
+struct SavedTupleWtime {
+	T* addr; T val; ID_WORD time;
+	inline SavedTupleWtime() {}
+
+	inline bool operator<(const SavedTupleWtime<T>& tup) { 
+		if(addr<tup.addr) return true;
+		else if(addr==tup.addr) return time<tup.time; 
+		else return false;
+	}
+};
+
+
+template<class T> struct tuple_less_then {
+	inline const bool operator() (SavedTupleWtime<T>* tup1, SavedTupleWtime<T>* tup2) { 
+		if(tup1->addr < tup2->addr) return true;
+		else if(tup1->addr == tup2->addr) return tup1->time < tup2->time; 
+		else return false;
+	}
+};
+
+template<class T>
+struct SavedTuple3 {
+	FULL_WORD addr; T val; ID_WORD index;
+	inline SavedTuple3() {}
+};
+*/
+

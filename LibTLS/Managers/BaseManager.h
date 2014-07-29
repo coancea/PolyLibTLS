@@ -1,0 +1,205 @@
+#ifndef BASE_MAN
+#define BASE_MAN
+
+
+#include "Threads/SpeculativeThread.h"
+#include "Util/AtomicOps.h"
+
+
+const ID_WORD NO_ROLLBACK = ID_WORD_MAX -1;
+
+//#define NO_ROLLBACK  (ID_WORD_MAX -1)
+
+/**
+ *  Provides common functionality to all Thread Managers
+ */
+
+template<
+		class SELF, class MemModel, MemModel* memModel, 
+		const int NUM_MASTERS, const int NUM_SLAVES
+> 
+class Base_Manager {
+	/**
+	 *  refinements of these class need to have the following methods implemented:
+	 *		goWait()
+	 *		respawnThreads()
+	 */
+
+  public:
+	typedef SELF 				TM;
+	typedef Speculative_Thread<TM>		SpecThread;
+	typedef	MemModel			UMM;
+	
+	static const int	SLAVES_TH_NUM = NUM_SLAVES;
+//	volatile ID_WORD	NUM_LIVE_MASTERS;
+
+	volatile ID_WORD	highestNrThread;		
+	volatile ID_WORD	lowestNrThread;
+	volatile ID_WORD	safe_id;
+	int			thCount;
+
+	volatile ATOMIC_WORD	synchCAS;
+	pthread_mutex_t		mutex;
+	pthread_cond_t 		cond_mutex;
+	SpecThread*		Spec_Threads[NUM_MASTERS];
+
+  public:
+
+  	typedef MemModel					MemoryModel;
+
+	/*******************************************************************************/
+	/************************** Get Template Arguments *****************************/
+	/*******************************************************************************/
+
+	inline static MemModel* const __attribute__((always_inline))
+	getMemoryModel()  	{ return memModel; }
+
+	inline static const ID_WORD __attribute__((always_inline)) 
+	getMasterThNum() 	{ return NUM_MASTERS; }
+
+	inline static const ID_WORD __attribute__((always_inline)) 
+	getSlaveThNum()  	{ return NUM_SLAVES; }
+
+	inline SELF* const __attribute__((always_inline)) 
+	getMe()  			{ return static_cast<SELF*>(this); }
+
+	inline const ID_WORD __attribute__((always_inline)) 
+	getLiveMasterThNum() const	{ return NUM_MASTERS; }
+
+
+	/*******************************************************************************/
+	/***************************** Init member vars ********************************/
+	/*******************************************************************************/
+
+	inline void __attribute__((always_inline)) init() {
+		highestNrThread 	= ID_WORD_MAX; 
+		lowestNrThread  	= 0; 
+		safe_id      		= NO_ROLLBACK;
+//		NUM_LIVE_MASTERS 	= NUM_MASTERS;
+		thCount				= 0;
+		synchCAS        	= 0;
+
+		pthread_mutex_init( &mutex,      NULL);
+		pthread_cond_init ( &cond_mutex, NULL);	
+	}
+
+
+	/*******************************************************************************/
+	/*********************** Compute Threads ID properties *************************/
+	/*******************************************************************************/
+
+	inline ID_WORD computeHighestNrThread() {
+		ID_WORD highest = 0;
+		for(int i=0; i<NUM_MASTERS; i++) {
+			SpecThread* th = Spec_Threads[i];
+			if(!th->isEnded()) {
+				ID_WORD id = Spec_Threads[i]->getID();
+				if(id>highest) highest = id;
+			}
+		}
+		highestNrThread = highest;
+		return highest;
+	}
+
+	inline void __attribute__((always_inline)) recomputeLowestNrThread() {
+		ID_WORD lowest = 0;
+		for(int i=0; i<NUM_MASTERS; i++) {
+			SpecThread* th = Spec_Threads[i];
+			if(!th->IsEnded()) {
+				ID_WORD id = th->getID();
+				if( id>ID_WORD_MAX-NUM_MASTERS-4 ) lowest=0;
+				if(lowest>id /*&& id>0*/) lowest = id;
+			}
+		}
+		lowestNrThread = lowest;
+	}
+
+	/*******************************************************************************/
+	/***************************** Commit In Front *********************************/
+	/*******************************************************************************/	
+
+	// THIS NEEDS TO BE UPDATED!!!
+	void commitInFront(const ID_WORD safe_thread);
+
+	/*******************************************************************************/
+	/*******************************************************************************/
+
+
+	template<class TH>
+	inline int 	__attribute__((always_inline)) 
+	shouldRollback(const ID_WORD id, TH* th) {
+		if(safe_id==NO_ROLLBACK || safe_id>id) { return 0; }
+		else {
+			//cout<<"shouldRollback!!!"<<endl;
+			getMe()->goWait(th);
+			//cout<<"Id: "<<th->getID()<<" has woked up!"<<endl;
+			return 1;
+		}
+	}
+
+    /*******************************************************************************************/
+    /*******************************************************************************************/
+	template<class TH>
+	void execute_sequential(const ID_WORD sf_id, const int nr_its, TH* th);
+
+  private:
+	template<class TH>
+	void resetThAfterRoll(TH* t);
+
+	static const int Roll_Seq_Its; // = 1;
+
+  public:
+
+	template<class TH>
+	int treatRollback(TH* th);
+		
+    /***************************************************************************************/
+    /***************************************************************************************/
+	inline void __attribute__((always_inline)) initEnv(const ID_WORD id) {
+		memModel->reset();
+	}
+
+	inline void __attribute__((always_inline))
+		setRollbackId(const ID_WORD roll_id){ safe_id = roll_id; }
+	inline ID_WORD __attribute__((always_inline))
+		getRollbackId() const               { return safe_id; }
+
+	void  updateRollbackID(const ID_WORD id);
+    /*******************************************************************************************/
+    /*******************************************************************************************/
+	template<class TH> 
+   	void speculate(); 
+
+	void registerSpecThread(SpecThread* th, uint pos);
+
+	template<class TH>
+	void registerSpecThreads();
+
+	inline SpecThread* getSpecThread(const int id) {
+		if(id<NUM_MASTERS)
+			return Spec_Threads[id];
+		else return NULL;
+	}
+
+	/*******************************************************************************************/
+	/****************************Synchronization primitives*************************************/
+	/*******************************************************************************************/
+	inline pthread_mutex_t* __attribute__((always_inline))		
+	get_mutex() { return &mutex; }
+
+	inline pthread_cond_t* __attribute__((always_inline))		
+	get_cond_mutex() { return &cond_mutex; }
+};
+
+
+#define hardWait(thread, expr)\
+pthread_mutex_lock( thread->get_mutex() ); expr;\
+pthread_cond_wait( thread->get_cond_mutex(), thread->get_mutex() );\
+pthread_mutex_unlock( thread->get_mutex() ); \
+cout<<"Th: "<<th->getID()<<" tests cancelation!"<<endl; \
+pthread_testcancel()		
+					
+
+
+
+#endif // define BASE_MAN
