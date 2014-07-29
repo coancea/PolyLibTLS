@@ -100,11 +100,8 @@ class Thread_Max :
 		unsigned long j;
 
 	public:
-		inline Thread_Max(): MASTER_TH(UNROLL, NULL)	{
-		}
 		inline Thread_Max(const unsigned long i, unsigned long* dummy)
 						: MASTER_TH(UNROLL,i,dummy)	{
-
         }
 
 		inline void initVars() {
